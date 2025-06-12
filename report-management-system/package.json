@@ -9,6 +9,8 @@
     "serve-json": "json-server --watch db.json --port 3001"
   },
   "dependencies": {
+    "@aws-amplify/ui-vue": "^4.3.3",
+    "aws-amplify": "^6.15.0",
     "axios": "^1.9.0",
     "core-js": "^3.8.3",
     "vue": "^3.2.13",
