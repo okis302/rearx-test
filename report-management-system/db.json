@@ -4,6 +4,17 @@
     { "id": 2, "title": "Server-Side Report", "content": "Content loaded via json-server." }
   ],
   "users": [
-    { "id": 1, "username": "admin", "password": "password" }
+    {
+      "id": 1,
+      "username": "admin",
+      "password": "password",
+      "role": "administrator"
+    },
+    {
+      "id": 2,
+      "username": "user",
+      "password": "password",
+      "role": "general"
+    }
   ]
 }
