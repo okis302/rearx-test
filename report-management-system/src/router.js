@@ -2,39 +2,76 @@ import { createRouter, createWebHistory } from 'vue-router';
 import ReportList from './components/ReportList.vue';
 import ReportView from './components/ReportView.vue';
 import ReportEdit from './components/ReportEdit.vue';
-// We might need a wrapper or direct App.vue methods for data handling with routes
-// For now, App.vue will still manage data, and routing will primarily control component visibility.
+import UserLogin from './components/Login.vue'; // Corrected path from previous step if needed
 
 const routes = [
   {
-    path: '/',
-    alias: '/reports', // Keep '/' as an alias for the list
+    path: '/login',
+    name: 'UserLogin',
+    component: UserLogin,
+    meta: { requiresAuth: false } // Public route
+  },
+  {
+    path: '/reports',
     name: 'ReportList',
-    component: ReportList
-    // Props will need to be passed from App.vue or state management
+    component: ReportList,
+    meta: { requiresAuth: true } // Requires authentication
+  },
+  {
+    path: '/', // Default path
+    redirect: () => {
+      // Redirect logic based on authentication
+      const isAuthenticated = localStorage.getItem('isAuthenticated') === 'true';
+      if (isAuthenticated) {
+        return '/reports';
+      }
+      return '/login';
+    }
   },
   {
     path: '/report/new',
     name: 'ReportCreate',
-    component: ReportEdit, // ReportEdit will be in 'create' mode
+    component: ReportEdit,
+    meta: { requiresAuth: true }
   },
   {
     path: '/report/:id',
     name: 'ReportView',
     component: ReportView,
-    props: true // Allows route params to be passed as props
+    props: true,
+    meta: { requiresAuth: true }
   },
   {
     path: '/report/:id/edit',
     name: 'ReportEdit',
     component: ReportEdit,
-    props: true // Allows route params to be passed as props
+    props: true,
+    meta: { requiresAuth: true }
   }
 ];
 
 const router = createRouter({
-  history: createWebHistory(process.env.BASE_URL || '/'), // Adjusted base URL
+  history: createWebHistory(process.env.BASE_URL || '/'),
   routes
+});
+
+router.beforeEach((to, from, next) => {
+  const isAuthenticated = localStorage.getItem('isAuthenticated') === 'true';
+  // Check if any matched route record has 'requiresAuth' meta field.
+  // Some routes like the '/' redirect might not have a component and thus no direct meta field,
+  // but the routes they redirect TO will be evaluated by the guard in the next navigation tick.
+  const requiresAuth = to.matched.some(record => record.meta.requiresAuth);
+
+  if (requiresAuth && !isAuthenticated) {
+    // If route requires auth and user is not authenticated, redirect to login
+    next({ name: 'UserLogin' });
+  } else if (to.name === 'UserLogin' && isAuthenticated) {
+    // If user is authenticated and tries to access login page, redirect to report list
+    next({ name: 'ReportList' });
+  } else {
+    // Otherwise, proceed as normal
+    next();
+  }
 });
 
 export default router;

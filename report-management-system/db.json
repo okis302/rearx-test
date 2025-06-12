@@ -2,5 +2,8 @@
   "reports": [
     { "id": 1, "title": "Initial Report from DB", "content": "This report comes from the mock backend." },
     { "id": 2, "title": "Server-Side Report", "content": "Content loaded via json-server." }
+  ],
+  "users": [
+    { "id": 1, "username": "admin", "password": "password" }
   ]
 }
