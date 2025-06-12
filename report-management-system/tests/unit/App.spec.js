@@ -6,7 +6,8 @@ import axios from 'axios';
 jest.mock('axios');
 
 const mockRouterPush = jest.fn();
-let mockRoute = { // Make it let so it can be modified by tests if needed
+// Mutable mock $route object
+let mockRoute = {
   params: {},
   name: 'SomeRoute',
   path: '/somepath'
@@ -23,18 +24,20 @@ const mockLocalStorage = (() => {
 })();
 Object.defineProperty(window, 'localStorage', { value: mockLocalStorage });
 
-describe('App.vue - With Roles', () => {
-  let wrapper;
-  const mockReportsData = [
-    { id: 1, title: 'Report 1', content: 'Content 1' },
-    { id: 2, title: 'Report 2', content: 'Content 2' }
-  ];
-  const adminUser = { username: 'admin', role: 'administrator' };
-  const generalUser = { username: 'user', role: 'general' };
 
-  const mountApp = (currentUser = null, currentRouteName = 'TestRoute', currentRoutePath = '/testpath') => {
-    // Reset mockRoute for each mount to ensure clean state for $route
-    mockRoute = { params: {}, name: currentRouteName, path: currentRoutePath };
+describe('App.vue - User Management Methods & Data Flow', () => {
+  let wrapper;
+  const mockUsersData = [
+    { id: 1, username: 'admin', role: 'administrator', password: 'adminpassword' },
+    { id: 2, username: 'user', role: 'general', password: 'userpassword' }
+  ];
+  const adminUser = { id: 1, username: 'admin', role: 'administrator' };
+  const generalUser = { id: 2, username: 'user', role: 'general' };
+
+  const mountApp = (currentUser = null, routeName = 'TestRoute', routeParams = {}, routePath = '/testpath') => {
+    mockRoute.name = routeName;
+    mockRoute.params = routeParams;
+    mockRoute.path = routePath;
 
     const appWrapper = shallowMount(App, {
       global: {
@@ -43,12 +46,11 @@ describe('App.vue - With Roles', () => {
           $route: mockRoute
         },
         stubs: {
-          'router-view': true,
-          'router-link': { template: '<a><slot/></a>' }
+            'router-view': true,
+            'router-link': { template: '<a><slot/></a>' }
         }
       }
     });
-
     if (currentUser) {
       appWrapper.vm.isAuthenticated = true;
       appWrapper.vm.currentUser = currentUser;
@@ -69,113 +71,171 @@ describe('App.vue - With Roles', () => {
     axios.put.mockReset();
     axios.delete.mockReset();
     mockRouterPush.mockClear();
-    window.localStorage.clear(); // Clears the jest.fn() based store
+    window.localStorage.clear();
   });
 
-  describe('handleLoginAttempt with Roles', () => {
-    it('sets currentUser with role on successful login', async () => {
-      wrapper = mountApp(); // Start unauthenticated
-      const mockUserFromApi = { id: 1, username: 'admin', password: 'password', role: 'administrator' };
-      axios.get.mockResolvedValue({ data: [mockUserFromApi] });
+  describe('fetchUsers', () => {
+    it('fetches users successfully if admin', async () => {
+      wrapper = mountApp(adminUser, 'UserList');
+      axios.get.mockResolvedValue({ data: mockUsersData });
+      await wrapper.vm.fetchUsers();
 
-      await wrapper.vm.handleLoginAttempt({ userId: 'admin', password: 'password' });
+      expect(axios.get).toHaveBeenCalledWith('http://localhost:3001/users');
+      expect(wrapper.vm.users).toEqual(mockUsersData);
+      expect(wrapper.vm.isLoadingUsers).toBe(false);
+      expect(wrapper.vm.userError).toBeNull();
+    });
 
-      expect(wrapper.vm.isAuthenticated).toBe(true);
-      expect(wrapper.vm.currentUser).toEqual({ username: 'admin', role: 'administrator' });
-      // Check localStorage through our mock
-      expect(window.localStorage.getItem('currentUser')).toEqual(JSON.stringify({ username: 'admin', role: 'administrator' }));
-      expect(mockRouterPush).toHaveBeenCalledWith('/');
+    it('prevents fetching users and sets error if not admin', async () => {
+      wrapper = mountApp(generalUser, 'UserList');
+      await wrapper.vm.fetchUsers();
+
+      expect(axios.get).not.toHaveBeenCalled();
+      expect(wrapper.vm.users).toEqual([]);
+      expect(wrapper.vm.userError).toBe("You don't have permission to view users.");
+    });
+
+    it('handles error when fetching users', async () => {
+      wrapper = mountApp(adminUser, 'UserList');
+      axios.get.mockRejectedValue(new Error('Network Error'));
+      await wrapper.vm.fetchUsers();
+
+      expect(wrapper.vm.userError).toBe('Failed to load users.');
+      expect(wrapper.vm.users).toEqual([]);
     });
   });
 
-  describe('handleSaveReport with Roles', () => {
-    const newReportPayload = { title: 'New Report', content: 'New Content' };
-    const newReportFromApi = { ...newReportPayload, id: 3 };
-
-    it('allows administrator to create a new report', async () => {
+  describe('getUserById (App.vue internal)', () => {
+    it('returns a user from the local users array', () => {
       wrapper = mountApp(adminUser);
-      axios.post.mockResolvedValue({ data: newReportFromApi });
-      await wrapper.vm.handleSaveReport(newReportPayload);
-      expect(axios.post).toHaveBeenCalledWith('http://localhost:3001/reports', newReportPayload);
-      expect(wrapper.vm.reports).toContainEqual(newReportFromApi);
-      expect(wrapper.vm.error).toBeNull(); // No error should be set
+      wrapper.vm.users = mockUsersData;
+      const user = wrapper.vm.getUserById(mockUsersData[1].id);
+      expect(user).toEqual(mockUsersData[1]);
+      expect(wrapper.vm.getUserById(999)).toBeUndefined();
+    });
+  });
+
+  describe('selectedUserForEdit computed property', () => {
+    it('computes selectedUserForEdit correctly when on UserEdit route', () => {
+        wrapper = mountApp(adminUser, 'UserEdit', { id: '2' });
+        wrapper.vm.users = mockUsersData;
+        expect(wrapper.vm.selectedUserForEdit).toEqual(mockUsersData[1]);
     });
 
-    it('prevents general user from creating a new report and sets error', async () => {
+    it('returns null for selectedUserForEdit when not on UserEdit route', () => {
+        wrapper = mountApp(adminUser, 'SomeOtherRoute');
+        wrapper.vm.users = mockUsersData;
+        expect(wrapper.vm.selectedUserForEdit).toBeNull();
+    });
+  });
+
+  describe('handleSaveUser', () => {
+    const newUserDetails = { username: 'newUser', password: 'password', role: 'general' };
+    const createdUser = { ...newUserDetails, id: 3 };
+    const existingUser = mockUsersData[1];
+    const updatedUserDetailsPayload = { id: existingUser.id, username: 'updatedUser', role: 'administrator' }; // Password omitted
+
+    it('allows admin to create a new user', async () => {
+      wrapper = mountApp(adminUser);
+      axios.post.mockResolvedValue({ data: createdUser });
+      await wrapper.vm.handleSaveUser(newUserDetails);
+
+      expect(axios.post).toHaveBeenCalledWith('http://localhost:3001/users', newUserDetails);
+      expect(wrapper.vm.users).toContainEqual(createdUser);
+      expect(mockRouterPush).toHaveBeenCalledWith({ name: 'UserList' });
+      expect(wrapper.vm.userError).toBeNull();
+    });
+
+    it('allows admin to update an existing user (password not changed)', async () => {
+        wrapper = mountApp(adminUser);
+        await wrapper.setData({users: [...mockUsersData]});
+
+        // API returns the full user, possibly with unchanged password or however backend handles it
+        const updatedUserFromApi = { ...existingUser, username: 'updatedUser', role: 'administrator' };
+        axios.put.mockResolvedValue({ data: updatedUserFromApi });
+
+        await wrapper.vm.handleSaveUser(updatedUserDetailsPayload); // Payload without password
+
+        expect(axios.put).toHaveBeenCalledWith(`http://localhost:3001/users/${existingUser.id}`, updatedUserDetailsPayload);
+        const userInVm = wrapper.vm.users.find(u => u.id === existingUser.id);
+        expect(userInVm.username).toBe('updatedUser');
+        expect(userInVm.role).toBe('administrator');
+        expect(mockRouterPush).toHaveBeenCalledWith({ name: 'UserList' });
+    });
+
+    it('allows admin to update an existing user (password changed)', async () => {
+        wrapper = mountApp(adminUser);
+        await wrapper.setData({users: [...mockUsersData]});
+        const payloadWithNewPassword = { ...updatedUserDetailsPayload, password: 'newSecurePassword' };
+        axios.put.mockResolvedValue({ data: { ...existingUser, ...payloadWithNewPassword} }); // API returns full user
+
+        await wrapper.vm.handleSaveUser(payloadWithNewPassword);
+        expect(axios.put).toHaveBeenCalledWith(`http://localhost:3001/users/${existingUser.id}`, payloadWithNewPassword);
+    });
+
+    it('prevents general user from saving a user', async () => {
       wrapper = mountApp(generalUser);
-      await wrapper.vm.handleSaveReport(newReportPayload);
+      await wrapper.vm.handleSaveUser(newUserDetails);
       expect(axios.post).not.toHaveBeenCalled();
-      expect(wrapper.vm.reports).not.toContainEqual(newReportFromApi);
-      expect(wrapper.vm.error).toBe('You do not have permission to save reports.');
-    });
-
-    it('allows administrator to update an existing report', async () => {
-      wrapper = mountApp(adminUser);
-      const existingReport = mockReportsData[0];
-      const updatedReportData = { ...existingReport, title: 'Updated Title By Admin' };
-      axios.put.mockResolvedValue({ data: updatedReportData });
-      await wrapper.setData({reports: [...mockReportsData]});
-
-      await wrapper.vm.handleSaveReport(updatedReportData);
-      expect(axios.put).toHaveBeenCalledWith(`http://localhost:3001/reports/${existingReport.id}`, updatedReportData);
-      const reportInVm = wrapper.vm.reports.find(r => r.id === existingReport.id);
-      expect(reportInVm.title).toBe('Updated Title By Admin');
-      expect(wrapper.vm.error).toBeNull();
-    });
-
-    it('prevents general user from updating an existing report and sets error', async () => {
-      wrapper = mountApp(generalUser);
-      const existingReport = mockReportsData[0];
-      const updatedReportData = { ...existingReport, title: 'Updated Title By User' };
-      await wrapper.setData({reports: [...mockReportsData]});
-
-      await wrapper.vm.handleSaveReport(updatedReportData);
       expect(axios.put).not.toHaveBeenCalled();
-      const reportInVm = wrapper.vm.reports.find(r => r.id === existingReport.id);
-      expect(reportInVm.title).toBe(existingReport.title);
-      expect(wrapper.vm.error).toBe('You do not have permission to save reports.');
+      expect(wrapper.vm.userError).toBe('You do not have permission to save users.');
     });
   });
 
-  describe('handleDeleteReport with Roles', () => {
-    const reportToDelete = mockReportsData[0];
+  describe('handleDeleteUser', () => {
+    const userToDelete = mockUsersData[1]; // generalUser, id: 2
 
-    it('allows administrator to delete a report', async () => {
-      wrapper = mountApp(adminUser);
+    it('allows admin to delete a user', async () => {
+      wrapper = mountApp(adminUser, 'UserList');
+      await wrapper.setData({users: [...mockUsersData]});
       axios.delete.mockResolvedValue({});
-      await wrapper.setData({reports: [...mockReportsData]});
 
-      await wrapper.vm.handleDeleteReport(reportToDelete.id);
-      expect(axios.delete).toHaveBeenCalledWith(`http://localhost:3001/reports/${reportToDelete.id}`);
-      expect(wrapper.vm.reports.find(r => r.id === reportToDelete.id)).toBeUndefined();
-      expect(wrapper.vm.error).toBeNull();
+      await wrapper.vm.handleDeleteUser(userToDelete.id);
+      expect(axios.delete).toHaveBeenCalledWith(`http://localhost:3001/users/${userToDelete.id}`);
+      expect(wrapper.vm.users.find(u => u.id === userToDelete.id)).toBeUndefined();
+      expect(wrapper.vm.userError).toBeNull();
     });
 
-    it('prevents general user from deleting a report and sets error', async () => {
-      wrapper = mountApp(generalUser);
-      await wrapper.setData({reports: [...mockReportsData]});
+    it('prevents admin from deleting themselves', async () => {
+      wrapper = mountApp(adminUser);
+      await wrapper.setData({users: [...mockUsersData]});
+      await wrapper.vm.handleDeleteUser(adminUser.id);
 
-      await wrapper.vm.handleDeleteReport(reportToDelete.id);
       expect(axios.delete).not.toHaveBeenCalled();
-      expect(wrapper.vm.reports.find(r => r.id === reportToDelete.id)).toBeDefined();
-      expect(wrapper.vm.error).toBe('You do not have permission to delete reports.');
+      expect(wrapper.vm.userError).toBe("You cannot delete your own account via this interface.");
+    });
+
+    it('navigates to UserList if deleted user was being edited', async () => {
+        wrapper = mountApp(adminUser, 'UserEdit', { id: String(userToDelete.id) });
+        await wrapper.setData({users: [...mockUsersData]});
+        axios.delete.mockResolvedValue({});
+
+        await wrapper.vm.handleDeleteUser(userToDelete.id);
+        expect(mockRouterPush).toHaveBeenCalledWith({ name: 'UserList' });
+    });
+
+    it('prevents general user from deleting a user', async () => {
+      wrapper = mountApp(generalUser);
+      await wrapper.setData({users: [...mockUsersData]});
+      await wrapper.vm.handleDeleteUser(userToDelete.id);
+
+      expect(axios.delete).not.toHaveBeenCalled();
+      expect(wrapper.vm.userError).toBe('You do not have permission to delete users.');
     });
   });
 
-  it('fetches reports (accessible to all authenticated users like general user)', async () => {
-    wrapper = mountApp(generalUser, 'ReportList', '/reports'); // Simulate being on ReportList route
-    axios.get.mockResolvedValue({ data: mockReportsData });
-    // Need to trigger fetchReports, e.g. by simulating created hook or route watch
-    // The created hook in App.vue calls fetchReports if path is '/' or name is 'ReportList'
-    // Our mountApp helper sets up $route.name, so created hook should trigger fetchReports
-    // For this specific test, let's ensure the conditions in `created()` are met by `mountApp`
-    // OR call it directly if we assume authentication and route conditions are met.
+  it('provides correct props to router-view for user management context', async () => {
+      wrapper = mountApp(adminUser, 'UserList');
+      await wrapper.setData({
+          users: mockUsersData,
+          isLoadingUsers: true,
+          userError: 'Some user error'
+      });
 
-    // Re-mount or adjust mountApp to ensure created hook logic for fetchReports is covered
-    // For this test, let's directly call it after mount, assuming conditions are met.
-    await wrapper.vm.fetchReports();
-
-    expect(axios.get).toHaveBeenCalledWith('http://localhost:3001/reports');
-    expect(wrapper.vm.reports).toEqual(mockReportsData);
+      // These assertions check the data on App.vue's VM which are bound to router-view props.
+      expect(wrapper.vm.users).toEqual(mockUsersData);
+      expect(wrapper.vm.isLoadingUsers).toBe(true);
+      expect(wrapper.vm.userError).toBe('Some user error');
+      expect(wrapper.vm.currentUser).toEqual(adminUser);
   });
 });
